@@ -12799,13 +12799,34 @@ int ndpi_match_hostname_protocol(struct ndpi_detection_module_struct *ndpi_struc
   */
   {
     u_int16_t ai_ep = ndpi_ai_check_hostname(ndpi_struct, what, what_len);
-    if(!ndpi_ai_endpoint_is_valid(ai_ep))
+    int ai_from_dns = 0;
+    if(!ndpi_ai_endpoint_is_valid(ai_ep)) {
       ai_ep = ndpi_ai_by_ip(ndpi_struct, flow);
+      ai_from_dns = 1;
+    }
     if(ndpi_ai_endpoint_is_valid(ai_ep)) {
       ndpi_set_detected_protocol(ndpi_struct, &flow->core, NDPI_PROTOCOL_AI,
                                  master_protocol, NDPI_CONFIDENCE_DPI);
       flow->core.ai_endpoint = ai_ep;
       flow->core.category = NDPI_PROTOCOL_CATEGORY_ARTIFICIAL_INTELLIGENCE;
+      /* Risk: a hosted AI provider named on an encrypted flow. The name is the
+       * only evidence under TLS/QUIC (ECH can hide it; the client TCP stack is the
+       * one remaining peer fact). Cleartext-HTTP AI is flagged by the HTTP hook. */
+      if(master_protocol == NDPI_PROTOCOL_TLS || master_protocol == NDPI_PROTOCOL_QUIC) {
+        if(is_flowrisk_info_enabled(ndpi_struct, NDPI_AI_INFERENCE_TRAFFIC))
+          ndpi_set_risk(ndpi_struct, &flow->core, NDPI_AI_INFERENCE_TRAFFIC,
+                        ai_from_dns ? "AI provider peer (DNS-resolved)"
+                                    : "AI provider peer (SNI/Host name)");
+        else
+          ndpi_set_risk(ndpi_struct, &flow->core, NDPI_AI_INFERENCE_TRAFFIC, NULL);
+        if(flow->metadata.l4.tcp.fingerprint != NULL &&
+           flow->metadata.l4.tcp.os_hint != ndpi_os_unknown) {
+          char info[64];
+          snprintf(info, sizeof(info), "client TCP stack: %s",
+                   ndpi_print_os_hint(flow->metadata.l4.tcp.os_hint));
+          ndpi_set_risk(ndpi_struct, &flow->core, NDPI_AI_INFERENCE_TRAFFIC, info);
+        }
+      }
     }
   }
 

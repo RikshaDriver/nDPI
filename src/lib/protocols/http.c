@@ -30,6 +30,7 @@
 
 #include "ndpi_api.h"
 #include "ndpi_private.h"
+#include "ndpi_ai.h"
 
 extern void ndpi_search_json(struct ndpi_detection_module_struct *ndpi_struct,
                              struct ndpi_flow_struct *flow);
@@ -1603,6 +1604,26 @@ static void process_request(struct ndpi_detection_module_struct *ndpi_struct,
   }
   ndpi_int_http_add_connection(ndpi_struct, flow, master_protocol);
   check_content_type_and_change_protocol(ndpi_struct, flow);
+
+  /* ④ AI endpoint: name a self-hosted engine / OpenAI-compatible endpoint from
+   * the cleartext request path. Only when the flow was not already named by
+   * peer name (SNI/Host, ECH DNS) -- those take priority. */
+  if(!ndpi_ai_endpoint_is_valid(flow->core.ai_endpoint) &&
+     packet->http_url_name.ptr != NULL && packet->http_url_name.len > 0) {
+    u_int16_t ai_ep = ndpi_ai_check_http(ndpi_struct, flow,
+                                         packet->http_url_name.ptr,
+                                         packet->http_url_name.len);
+    if(ai_ep != NDPI_AI_ENDPOINT_NONE) {
+      flow->core.ai_endpoint = ai_ep;
+      ndpi_set_detected_protocol(ndpi_struct, &flow->core, NDPI_PROTOCOL_AI,
+                                 NDPI_PROTOCOL_HTTP, NDPI_CONFIDENCE_DPI);
+      if(is_flowrisk_info_enabled(ndpi_struct, NDPI_AI_INFERENCE_TRAFFIC))
+        ndpi_set_risk(ndpi_struct, &flow->core, NDPI_AI_INFERENCE_TRAFFIC,
+                      "AI inference endpoint (HTTP signature)");
+      else
+        ndpi_set_risk(ndpi_struct, &flow->core, NDPI_AI_INFERENCE_TRAFFIC, NULL);
+    }
+  }
 
   if(flow->metadata.http.user_agent == NULL ||
      flow->metadata.http.user_agent[0] == '\0') {

@@ -132,6 +132,13 @@ u_int16_t ndpi_ai_by_ip(struct ndpi_detection_module_struct *ndpi_struct, struct
  * first in the DNS dissector). No-op if the cache is disabled or the name is empty. */
 void ndpi_ai_dns_answer(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_core_struct *core, u_int64_t key);
 
+/* HTTP request-path signature: name a self-hosted engine (unambiguous
+ * /api/*, control routes) or the OpenAI-compatible dialect from the cleartext
+ * request path. Detection only -- the caller classifies + flags the risk.
+ * Returns NONE when the flow is already named (peer-name evidence wins) or the
+ * path matches no known endpoint. */
+u_int16_t ndpi_ai_check_http(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_struct *flow, const char *path, u_int path_len);
+
 /* Module lifecycle: build the SNI/Host automaton + the ECH DNS-fallback cache.
  * Called once from the core init, after the other automata are finalized. */
 void ndpi_ai_init(struct ndpi_detection_module_struct *ndpi_struct);

@@ -252,6 +252,82 @@ void ndpi_ai_dns_answer(struct ndpi_detection_module_struct *ndpi_str,
 }
 
 /* --------------------------------------------------------------- *
+ *  HTTP request-path signature (self-hosted engines +
+ *  OpenAI-compatible). Detection only: it names the endpoint from the
+ *  cleartext request path; the hook that calls it does the classification
+ *  and the risk. No automaton/LRU state -- a plain table scan over the
+ *  path. Adding an engine is a one-line data change.
+ * --------------------------------------------------------------- */
+
+/* Unambiguous, engine-specific routes: naming the engine is safe. */
+static const struct { const char *path; u_int16_t endpoint; } ai_http_engine_paths[] = {
+  /* Ollama native API (no other engine serves /api/*) */
+  { "/api/chat",      NDPI_AI_ENDPOINT_OLLAMA },
+  { "/api/generate",  NDPI_AI_ENDPOINT_OLLAMA },
+  { "/api/tags",      NDPI_AI_ENDPOINT_OLLAMA },
+  { "/api/show",      NDPI_AI_ENDPOINT_OLLAMA },
+  { "/api/embed",     NDPI_AI_ENDPOINT_OLLAMA },
+  { "/api/version",   NDPI_AI_ENDPOINT_OLLAMA },
+  { "/api/ps",        NDPI_AI_ENDPOINT_OLLAMA },
+  { "/api/pull",      NDPI_AI_ENDPOINT_OLLAMA },
+  { "/api/push",      NDPI_AI_ENDPOINT_OLLAMA },
+  /* llama.cpp (llama-server) control routes */
+  { "/slots",         NDPI_AI_ENDPOINT_LLAMA_CPP },
+  { "/props",         NDPI_AI_ENDPOINT_LLAMA_CPP },
+  /* vLLM control route (unambiguous) */
+  { "/model_info",    NDPI_AI_ENDPOINT_VLLM },
+  { NULL, 0 }
+};
+
+/*
+ * OpenAI-compatible inference routes. Any engine or gateway that serves the
+ * OpenAI dialect matches here. The path proves the dialect, not the engine, so
+ * we name the COMPATIBLE family and never guess a specific engine.
+ */
+static const char *ai_http_compatible_paths[] = {
+  "/chat/completions",
+  "/completions",
+  "/embeddings",
+  "/generate_content",
+  "/v1/responses",
+  "/rerank",
+  "/converse",
+  "/inference",
+  /* non-text modalities, served by the same engines */
+  "/images/generations",
+  "/images/edits",
+  "/audio/speech",
+  "/audio/transcriptions",
+  NULL
+};
+
+u_int16_t ndpi_ai_check_http(struct ndpi_detection_module_struct *ndpi_str,
+                             struct ndpi_flow_struct *flow,
+                             const char *path, u_int path_len) {
+  int i;
+
+  if(!ndpi_str || !flow || !path || path_len == 0)
+    return(NDPI_AI_ENDPOINT_NONE);
+
+  /* Peer-name evidence (SNI/Host, or the ECH DNS fallback) already named the
+   * endpoint: it wins, and the HTTP path must not overwrite it. */
+  if(ndpi_ai_endpoint_is_valid(flow->core.ai_endpoint))
+    return(flow->core.ai_endpoint);
+
+  /* 1. Unambiguous engine-specific routes name the engine. */
+  for(i = 0; ai_http_engine_paths[i].path != NULL; i++)
+    if(ndpi_strnstr(path, ai_http_engine_paths[i].path, path_len) != NULL)
+      return(ai_http_engine_paths[i].endpoint);
+
+  /* 2. The OpenAI-compatible dialect names the family (never a specific engine). */
+  for(i = 0; ai_http_compatible_paths[i] != NULL; i++)
+    if(ndpi_strnstr(path, ai_http_compatible_paths[i], path_len) != NULL)
+      return(NDPI_AI_ENDPOINT_OPENAI_COMPATIBLE);
+
+  return(NDPI_AI_ENDPOINT_NONE);
+}
+
+/* --------------------------------------------------------------- *
  *  lifecycle: build the automaton + LRU cache
  * --------------------------------------------------------------- */
 void ndpi_ai_init(struct ndpi_detection_module_struct *ndpi_str) {
